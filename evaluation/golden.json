@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "annotation_note": "从当前五份 ACTIVE 说明书的原文分块人工选取的起始评测集；修改语料或分块版本后需复核 chunk_id 与原 PDF。",
+  "parse_cases": [
+    {"document_id": "2f27d83269f2be92f41b1520", "drug": "厄贝沙坦片", "required_sections": ["药品名称", "用法用量", "不良反应", "儿童用药", "药物相互作用"], "min_table_rows": 0, "text_samples": [{"chunk_id": "69df363c0cd05160165c3b44", "text": "每日150mg"}]},
+    {"document_id": "fc84253ffff28d0224237ab2", "drug": "坎地沙坦酯片", "required_sections": ["药品名称", "用法用量", "儿童用药", "药物相互作用"], "min_table_rows": 14, "text_samples": [{"chunk_id": "feca747d6aedbb41ced663d1", "text": "4～8mg"}], "table_samples": [{"chunk_id": "c14223bfedb9f56ec3844de9", "text": "螺内酯"}]},
+    {"document_id": "a9e949e7183a5400c6cebf1c", "drug": "奥美拉唑肠溶胶囊", "required_sections": ["药品名称", "用法用量", "不良反应", "儿童用药", "药物相互作用"], "min_table_rows": 0, "text_samples": [{"chunk_id": "1c97dfce84e56a4716a52d00", "text": "20mg"}]},
+    {"document_id": "9327de1ca71d8c07dbfa8fc9", "drug": "氯雷他定片", "required_sections": ["药品名称", "用法用量", "不良反应", "禁忌"], "min_table_rows": 0, "text_samples": [{"chunk_id": "4f62c67108b978985ad0599a", "text": "5 毫克"}]},
+    {"document_id": "c4cc071a0970b91304affda2", "drug": "达可替尼片", "required_sections": ["药品名称", "用法用量", "不良反应", "儿童用药", "药物相互作用"], "min_table_rows": 55, "text_samples": [{"chunk_id": "9634d3c486a912990f7422aa", "text": "3或4级"}], "table_samples": [{"chunk_id": "9634d3c486a912990f7422aa", "text": "腹泻"}]}
+  ],
+  "retrieval_cases": [
+    {"id": "irb-dose", "category": "dose", "query": "厄贝沙坦通常的初始剂量是多少？", "drug": "厄贝沙坦片", "section": "用法用量", "relevant_chunk_ids": ["69df363c0cd05160165c3b44"]},
+    {"id": "irb-dialysis", "category": "population", "query": "厄贝沙坦对血液透析患者的初始剂量怎么说？", "drug": "厄贝沙坦片", "section": "用法用量", "relevant_chunk_ids": ["69df363c0cd05160165c3b44", "e76cd30204757d8b888eaa29"]},
+    {"id": "irb-child", "category": "population", "query": "厄贝沙坦儿童用药的安全性和疗效是否已经建立？", "drug": "厄贝沙坦片", "section": "儿童用药", "relevant_chunk_ids": ["f268c0986cf4d3867a8af91d"]},
+    {"id": "irb-potassium", "category": "interaction", "query": "厄贝沙坦与补钾药物合用有什么风险？", "drug": "厄贝沙坦片", "section": "药物相互作用", "relevant_chunk_ids": ["2cfb23f954f1b3b629eb91e4"]},
+    {"id": "can-dose", "category": "dose", "query": "坎地沙坦酯片成人通常每日剂量是多少？", "drug": "坎地沙坦酯片", "section": "用法用量", "relevant_chunk_ids": ["feca747d6aedbb41ced663d1"]},
+    {"id": "can-child", "category": "population", "query": "坎地沙坦酯对儿童用药的安全性是否确定？", "drug": "坎地沙坦酯片", "section": "儿童用药", "relevant_chunk_ids": ["2b2c4866ed506d5c4d8617b6"]},
+    {"id": "can-potassium", "category": "table_row", "query": "坎地沙坦酯与螺内酯等保钾利尿药合用有什么注意事项？", "drug": "坎地沙坦酯片", "section": "药物相互作用", "relevant_chunk_ids": ["c14223bfedb9f56ec3844de9"]},
+    {"id": "can-pregnancy", "category": "population", "query": "坎地沙坦酯孕妇用药的说明是什么？", "drug": "坎地沙坦酯片", "section": "孕妇及哺乳期妇女用药", "relevant_chunk_ids": ["19d258eb2cafc498a50990d2"]},
+    {"id": "ome-dose", "category": "dose", "query": "奥美拉唑治疗消化性溃疡每次用量是多少？", "drug": "奥美拉唑肠溶胶囊", "section": "用法用量", "relevant_chunk_ids": ["1c97dfce84e56a4716a52d00"]},
+    {"id": "ome-child", "category": "population", "query": "奥美拉唑对婴幼儿用药有什么说明？", "drug": "奥美拉唑肠溶胶囊", "section": "儿童用药", "relevant_chunk_ids": ["51e05092d95b5d0e501cdd82"]},
+    {"id": "ome-keto", "category": "interaction", "query": "奥美拉唑与酮康唑合用对吸收有什么影响？", "drug": "奥美拉唑肠溶胶囊", "section": "药物相互作用", "relevant_chunk_ids": ["ada92963873decc663f8d435"]},
+    {"id": "ome-pregnancy", "category": "population", "query": "奥美拉唑说明书如何描述孕妇和哺乳期妇女用药？", "drug": "奥美拉唑肠溶胶囊", "section": "孕妇及哺乳期妇女用药", "relevant_chunk_ids": ["c6c24d2898e015d9a003cddd"]},
+    {"id": "lor-adult-dose", "category": "dose", "query": "氯雷他定片成人一次服用多少毫克？", "drug": "氯雷他定片", "section": "用法用量", "relevant_chunk_ids": ["f0d4d8ff67c80ffdf4652d1e"]},
+    {"id": "lor-child-dose", "category": "dose", "query": "氯雷他定片体重不超过30公斤的儿童每次用量是多少？", "drug": "氯雷他定片", "section": "用法用量", "relevant_chunk_ids": ["4f62c67108b978985ad0599a"]},
+    {"id": "lor-allergy", "category": "contraindication", "query": "氯雷他定片对成份过敏者是否禁用？", "drug": "氯雷他定片", "section": "禁忌", "relevant_chunk_ids": ["9c434f8c6cc78fa420720d96"]},
+    {"id": "lor-adverse", "category": "adverse", "query": "氯雷他定片有哪些常见不良反应？", "drug": "氯雷他定片", "section": "不良反应", "relevant_chunk_ids": ["b09dacdc06b1d9f48a06307d"]},
+    {"id": "dac-dose", "category": "dose", "query": "达可替尼推荐的每日剂量是多少？", "drug": "达可替尼片", "section": "用法用量", "relevant_chunk_ids": ["b394548e256f0efe91bba7dd"]},
+    {"id": "dac-diarrhea", "category": "table_row", "query": "达可替尼发生3级腹泻时如何调整剂量？", "drug": "达可替尼片", "section": "用法用量", "relevant_chunk_ids": ["9634d3c486a912990f7422aa"]},
+    {"id": "dac-missed", "category": "dose", "query": "达可替尼漏服一剂后是否要补服？", "drug": "达可替尼片", "section": "用法用量", "relevant_chunk_ids": ["2f2449f4b8a8bdae5c9d2211"]},
+    {"id": "dac-ppi", "category": "interaction", "query": "达可替尼与PPI同时使用有什么影响？", "drug": "达可替尼片", "section": "药物相互作用", "relevant_chunk_ids": ["9bbba5cc50c140138f49872e"]},
+    {"id": "dac-child", "category": "population", "query": "达可替尼儿童用药的安全性和有效性是否确定？", "drug": "达可替尼片", "section": "儿童用药", "relevant_chunk_ids": ["31f59eda1394f5dfe9a6b3bd"]}
+  ],
+  "comparison_cases": [
+    {"id": "arb-child", "query": "厄贝沙坦和坎地沙坦酯的儿童用药说明有何区别？", "expected_by_drug": {"厄贝沙坦片": ["f268c0986cf4d3867a8af91d"], "坎地沙坦酯片": ["2b2c4866ed506d5c4d8617b6"]}}
+  ],
+  "answer_cases": [
+    {"id": "irb-dose", "query": "厄贝沙坦通常的初始剂量是多少？", "drug": "厄贝沙坦片", "answerable": true, "expected_terms": ["150mg"], "expected_chunk_ids": ["69df363c0cd05160165c3b44"]},
+    {"id": "can-child", "query": "坎地沙坦酯对儿童用药的安全性是否确定？", "drug": "坎地沙坦酯片", "answerable": true, "expected_terms": ["尚未确定"], "expected_chunk_ids": ["2b2c4866ed506d5c4d8617b6"]},
+    {"id": "ome-child", "query": "奥美拉唑对婴幼儿用药有什么说明？", "drug": "奥美拉唑肠溶胶囊", "answerable": true, "expected_terms": ["禁用"], "expected_chunk_ids": ["51e05092d95b5d0e501cdd82"]},
+    {"id": "lor-child-dose", "query": "氯雷他定片体重不超过30公斤的儿童每次用量是多少？", "drug": "氯雷他定片", "answerable": true, "expected_terms": ["5", "毫克"], "expected_chunk_ids": ["4f62c67108b978985ad0599a"]},
+    {"id": "dac-diarrhea", "query": "达可替尼发生3级腹泻时如何调整剂量？", "drug": "达可替尼片", "answerable": true, "expected_terms": ["暂时停用", "≤1", "降低"], "expected_chunk_ids": ["9634d3c486a912990f7422aa"]},
+    {"id": "dac-unsupported", "query": "达可替尼在火星低重力环境中的具体剂量是多少？", "drug": "达可替尼片", "answerable": false, "expected_terms": [], "expected_chunk_ids": []},
+    {"id": "cross-drug-unsupported", "query": "氯雷他定片和达可替尼片同时服用是否安全？", "drug": null, "answerable": false, "expected_terms": [], "expected_chunk_ids": []}
+  ]
+}

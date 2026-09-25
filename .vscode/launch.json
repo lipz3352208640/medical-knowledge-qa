@@ -1,0 +1,99 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "启动 药品咨询RAG系统",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "uvicorn",
+      "args": [
+        "app.web.api:app",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        "8000"
+      ],
+      "cwd": "${workspaceFolder}",
+      "envFile": "${workspaceFolder}/.env",
+      "env": {
+        "PYTHONIOENCODING": "utf-8"
+      },
+      "console": "integratedTerminal",
+      "justMyCode": false
+    },
+    {
+      "name": "Python: 调试当前测试文件",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "unittest",
+      "args": [
+        "${file}",
+        "-v"
+      ],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "justMyCode": true
+    },
+    {
+      "name": "Python: 调试全部单元测试",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "unittest",
+      "args": [
+        "discover",
+        "-s",
+        "tests",
+        "-v"
+      ],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "justMyCode": true
+    },
+    {
+      "name": "Python: 调试五份 PDF 集成测试",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "unittest",
+      "args": [
+        "tests.test_samples.PDFIntegrationTests.test_all_samples_provenance_and_repeatable_identity",
+        "-v"
+      ],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "justMyCode": true,
+      "env": {
+        "RUN_PDF_INTEGRATION": "1",
+        "PYTHONIOENCODING": "utf-8"
+      }
+    },
+    {
+      "name": "Python: 调试 MySQL 集成测试",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "unittest",
+      "args": [
+        "tests.test_mysql_integration.MySQLIntegrationTests.test_migration_and_idempotent_insert",
+        "-v"
+      ],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "justMyCode": true,
+      "envFile": "${workspaceFolder}/.env.test"
+    },
+    {
+      "name": "Python: 调试五份 PDF 解析命令",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "app.cli",
+      "args": [
+        "parse-samples"
+      ],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "justMyCode": true,
+      "env": {
+        "PYTHONIOENCODING": "utf-8"
+      }
+    }
+  ]
+}
