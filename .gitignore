@@ -6,4 +6,5 @@ __pycache__/
 .env.test
 data/output/
 data/evaluation/
+data/table-inspect/
 tmp*/

@@ -68,7 +68,7 @@ $env:RERANKER_MODEL = 'D:\model\bge-reranker-v2-m'
 .\.venv\Scripts\python.exe -m app.cli retrieve --query '达可替尼的腹泻如何调整剂量？'
 ```
 
-`retrieve` 使用 MySQL 中的药品名与别名解析问题，并按 ACTIVE 文档、药品和章节过滤。人群标签可能缺失于短表格行或剂量段落，因此作为查询线索参与排序，不作为硬排除条件。BM25 从过滤范围内的原始 Child 计算 Top 20；Qdrant Dense Vector 从状态为 READY、模型和 collection 匹配的文档提供另一组 Top 20。两路名次经 RRF 融合后，由 Cross-Encoder 对 `(问题, 原文候选)` 打分。最终返回 5～8 条原文证据，包含页码、来源引用、两路名次、RRF 分数和精排分数。概括型问题可以通过摘要定位来源，但摘要不会作为最终证据。
+`retrieve` 使用 MySQL 中的药品名与别名解析问题，并按 ACTIVE 文档、药品和章节过滤。人群标签可能缺失于短表格行或剂量段落，因此作为查询线索参与排序，不作为硬排除条件。单药、单明确章节的概括型问题优先查询摘要通道；命中可回溯的章节摘要后直接取得其原始 Child，摘要缺失或不完整时再回退正文召回。其他查询由 BM25 从过滤范围内的原始 Child 计算 Top 20，Qdrant Dense Vector 从状态为 READY、模型和 collection 匹配的文档提供另一组 Top 20。两路名次经 RRF 融合后，由 Cross-Encoder 对 `(问题, 原文候选)` 打分。最终返回 5～8 条原文证据，包含页码、来源引用、两路名次、RRF 分数和精排分数。摘要只用于定位来源，不作为最终证据。
 
 口语问题未识别出标准章节，或首次召回为空/候选过少时，检索器会调用 `qwen3.5:latest` 生成结构化查询改写。原问题与规范问题、扩展问题分别召回，再以原问题更高权重进行 RRF 融合。改写结果必须对齐标准 intent 和章节，并通过药品、数值、等级、否定含义校验；校验失败或 LLM 不可用时自动保留原始检索结果。可设置 `QUERY_REWRITE_ENABLED=false` 关闭。检索调试输出和网页压缩步骤中会显示 `query_rewrite` 决策。
 

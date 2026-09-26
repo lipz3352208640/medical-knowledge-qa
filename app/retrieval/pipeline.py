@@ -314,8 +314,23 @@ class RetrievalEngine:
         rewrite: QueryRewrite | None,
     ) -> DrugEvidence:
         scope_query = _single_drug_query(query, parsed, drug)
+        summary_candidates: list[RankedCandidate] = []
+        summary_first = self._should_use_summary_first(parsed, drug_id, sections)
+        vector = None
+        filters = self._scope_filters(drug_id, active_ids, sections)
+        if summary_first:
+            vector = self._query_vector(scope_query, ready_ids)
+            complete_section_summary = self._route_summaries(
+                scope_query, vector, filters, ready_ids, summary_candidates
+            )
+            if complete_section_summary and summary_candidates:
+                return self._rerank_scope(
+                    drug, drug_id, scope_query, summary_candidates, parsed
+                )
+
         lexical, dense, vector, filters = self._recall_scope(
-            scope_query, drug_id, active_ids, ready_ids, sections
+            scope_query, drug_id, active_ids, ready_ids, sections,
+            prepared_vector=vector,
         )
         query_hits = [(lexical, dense)]
         rerank_query = scope_query
@@ -333,8 +348,62 @@ class RetrievalEngine:
                 query_hits.append((rewritten_lexical, rewritten_dense))
             rerank_query = f"{scope_query}；检索规范化：{rewrite.normalized_query}"
         candidates = _reciprocal_rank_fusion_queries(query_hits, k=self.rrf_k)
-        if parsed.broad:
+        if summary_candidates:
+            self._merge_summary_candidates(candidates, summary_candidates)
+        elif parsed.broad:
             self._route_summaries(scope_query, vector, filters, ready_ids, candidates)
+        return self._rerank_scope(drug, drug_id, rerank_query, candidates, parsed)
+
+    @staticmethod
+    def _should_use_summary_first(
+        parsed: ParsedQuery,
+        drug_id: str | None,
+        sections: tuple[str, ...],
+    ) -> bool:
+        """Use a complete section summary as the primary route for scoped overviews."""
+        return (
+            parsed.intent == "overview"
+            and parsed.broad
+            and not parsed.comparison
+            and not parsed.requires_exact_value
+            and drug_id is not None
+            and len(parsed.drug_ids) == 1
+            and len(sections) == 1
+        )
+
+    @staticmethod
+    def _scope_filters(
+        drug_id: str | None,
+        active_ids: tuple[str, ...],
+        sections: tuple[str, ...],
+    ) -> ChunkFilters:
+        return ChunkFilters(
+            document_ids=active_ids,
+            drug_ids=(drug_id,) if drug_id else (),
+            sections=sections,
+            # Population labels are sparse on short dose/table rows. Keep them
+            # in the query for ranking, but never hard-exclude unlabelled facts.
+            populations=(),
+        )
+
+    def _query_vector(
+        self, query: str, ready_ids: tuple[str, ...]
+    ) -> list[float] | None:
+        if not ready_ids:
+            return None
+        vectors = self.embedder.embed([query])
+        if len(vectors) != 1:
+            raise ValueError("Embedder must return one vector for one query")
+        return vectors[0]
+
+    def _rerank_scope(
+        self,
+        drug: str | None,
+        drug_id: str | None,
+        rerank_query: str,
+        candidates: list[RankedCandidate],
+        parsed: ParsedQuery,
+    ) -> DrugEvidence:
         if not candidates:
             return DrugEvidence(drug, drug_id, [])
         candidates.sort(
@@ -345,7 +414,11 @@ class RetrievalEngine:
             raise ValueError("Reranker returned invalid scores")
         for item, score in zip(candidates, scores, strict=True):
             item.rerank_score = score
-        candidates.sort(key=lambda item: (-item.rerank_score, -item.rrf_score, item.chunk.id))
+        candidates.sort(key=lambda item: (
+            -item.rerank_score,
+            -(item.rrf_score + item.summary_route_score),
+            item.chunk.id,
+        ))
         selected = candidates[:self.evidence_limit]
         self._expand_context(selected, parsed)
         return DrugEvidence(drug, drug_id, selected)
@@ -357,23 +430,16 @@ class RetrievalEngine:
         active_ids: tuple[str, ...],
         ready_ids: tuple[str, ...],
         sections: tuple[str, ...],
+        *,
+        prepared_vector: list[float] | None = None,
     ) -> tuple[list, list, list[float] | None, ChunkFilters]:
-        filters = ChunkFilters(
-            document_ids=active_ids,
-            drug_ids=(drug_id,) if drug_id else (),
-            sections=sections,
-            # Population labels are sparse on short dose/table rows. Keep them
-            # in the query for ranking, but never hard-exclude unlabelled facts.
-            populations=(),
-        )
+        filters = self._scope_filters(drug_id, active_ids, sections)
         lexical = bm25_search(self.mysql_url, query, filters, limit=self.recall_limit)
-        vector = None
+        vector = prepared_vector
         dense = []
         if ready_ids:
-            vectors = self.embedder.embed([query])
-            if len(vectors) != 1:
-                raise ValueError("Embedder must return one vector for one query")
-            vector = vectors[0]
+            if vector is None:
+                vector = self._query_vector(query, ready_ids)
             vector_filters = ChunkFilters(
                 document_ids=ready_ids,
                 drug_ids=filters.drug_ids,
@@ -390,7 +456,7 @@ class RetrievalEngine:
         filters: ChunkFilters,
         ready_ids: tuple[str, ...],
         candidates: list[RankedCandidate],
-    ) -> None:
+    ) -> bool:
         lexical = summary_search(self.mysql_url, query, filters, limit=5)
         dense = []
         if vector is not None:
@@ -403,8 +469,15 @@ class RetrievalEngine:
             dense = self.vector_store.search(vector, vector_filters, limit=5, channel="summary")
         routed = reciprocal_rank_fusion(lexical, dense, k=self.rrf_k)
         by_id = {item.chunk.id: item for item in candidates}
+        complete_section_summary = False
         for rank, summary in enumerate(routed[:5], start=1):
-            sources = load_summary_sources(self.mysql_url, summary.chunk.id)
+            try:
+                sources = load_summary_sources(self.mysql_url, summary.chunk.id)
+            except ValueError:
+                # A stale or incomplete summary must not suppress primary recall.
+                continue
+            if summary.chunk.content_type == "section_summary":
+                complete_section_summary = True
             key_points = summary.chunk.metadata.get("key_point_sources") or {}
             representative_ids = {
                 source_id for source_ids in key_points.values() for source_id in source_ids
@@ -417,6 +490,21 @@ class RetrievalEngine:
                     by_id[source.id] = candidate
                     candidates.append(candidate)
                 candidate.summary_route_score += 0.25 / (self.rrf_k + rank)
+        return complete_section_summary
+
+    @staticmethod
+    def _merge_summary_candidates(
+        candidates: list[RankedCandidate],
+        summary_candidates: list[RankedCandidate],
+    ) -> None:
+        by_id = {item.chunk.id: item for item in candidates}
+        for summary_candidate in summary_candidates:
+            existing = by_id.get(summary_candidate.chunk.id)
+            if existing is None:
+                candidates.append(summary_candidate)
+                by_id[summary_candidate.chunk.id] = summary_candidate
+            else:
+                existing.summary_route_score += summary_candidate.summary_route_score
 
     def _expand_context(self, selected: list[RankedCandidate], parsed: ParsedQuery) -> None:
         needed: list[str] = []

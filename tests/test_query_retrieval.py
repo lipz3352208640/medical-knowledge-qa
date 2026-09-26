@@ -265,6 +265,71 @@ class QueryRetrievalTests(unittest.TestCase):
         self.assertGreater(evidence[0].summary_route_score, 0)
         self.assertEqual([part.id for part in evidence[0].context_chunks], ["lead"])
 
+    def test_scoped_overview_uses_section_summary_without_primary_recall(self):
+        source = _chunk(
+            "best-attention", "drug-a", parent_id=None,
+            metadata={"section": "注意事项"},
+        )
+        summary = _chunk(
+            "attention-summary", "drug-a", kind="section_summary", parent_id=None,
+            metadata={
+                "section": "注意事项",
+                "key_point_sources": {"联合用药": ["best-attention"]},
+            },
+        )
+        store = _Store({
+            (("drug-a",), "summary"): [VectorHit(summary, 0.9)],
+        })
+        primary_search = MagicMock(return_value=[])
+        with (
+            patch("app.retrieval.pipeline.list_active_drug_aliases", return_value=[
+                ("甲药", "drug-a")]),
+            patch("app.retrieval.pipeline.list_active_document_ids", return_value=[
+                "doc-drug-a"]),
+            patch("app.retrieval.pipeline.list_ready_vector_document_ids", return_value=[
+                "doc-drug-a"]),
+            patch("app.retrieval.pipeline.bm25_search", primary_search),
+            patch("app.retrieval.pipeline.summary_search", return_value=[
+                LexicalHit(summary, 2.0)]),
+            patch("app.retrieval.pipeline.load_summary_sources", return_value=[source]),
+            patch("app.retrieval.pipeline.load_chunks_by_ids", return_value=[]),
+            patch("app.retrieval.pipeline.load_parent_chunks", return_value=[]),
+        ):
+            result = RetrievalEngine(
+                "mysql://unused", _Embedder(), store, _Reranker()
+            ).retrieve("甲药有哪些注意事项？")
+
+        self.assertEqual(
+            [item.chunk.id for item in result.groups[0].evidence],
+            ["best-attention"],
+        )
+        primary_search.assert_not_called()
+        self.assertEqual([channel for _, channel in store.calls], ["summary"])
+
+    def test_scoped_overview_falls_back_when_section_summary_is_unavailable(self):
+        source = _chunk(
+            "best-attention", "drug-a", parent_id=None,
+            metadata={"section": "注意事项"},
+        )
+        primary_search = MagicMock(return_value=[LexicalHit(source, 2.0)])
+        with (
+            patch("app.retrieval.pipeline.list_active_drug_aliases", return_value=[
+                ("甲药", "drug-a")]),
+            patch("app.retrieval.pipeline.list_active_document_ids", return_value=[
+                "doc-drug-a"]),
+            patch("app.retrieval.pipeline.list_ready_vector_document_ids", return_value=[]),
+            patch("app.retrieval.pipeline.bm25_search", primary_search),
+            patch("app.retrieval.pipeline.summary_search", return_value=[]),
+            patch("app.retrieval.pipeline.load_chunks_by_ids", return_value=[]),
+            patch("app.retrieval.pipeline.load_parent_chunks", return_value=[]),
+        ):
+            result = RetrievalEngine(
+                "mysql://unused", _Embedder(), _Store({}), _Reranker()
+            ).retrieve("甲药有哪些注意事项？")
+
+        self.assertEqual(result.groups[0].evidence[0].chunk.id, "best-attention")
+        primary_search.assert_called_once()
+
     def test_comparison_aligns_each_section_for_each_drug(self):
         adverse = _chunk("best-adverse", "drug-a")
         store = _Store({})

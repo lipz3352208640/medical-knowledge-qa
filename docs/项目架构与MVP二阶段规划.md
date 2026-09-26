@@ -407,14 +407,24 @@ LLM 改写必须通过以下校验：
 
 ```mermaid
 flowchart LR
-    Q[当前药品范围内的问题] --> META[ACTIVE 文档 + 药品 + 章节]
-    META --> B[BM25 Top 20]
-    META --> V[Qdrant Dense Top 20]
+    Q[当前药品范围内的问题] --> P{ParsedQuery intent}
+    P --> G{单药 + 单章节<br/>overview / broad?}
+    G -- 是 --> SM[摘要 BM25 + Qdrant 各 Top 5]
+    SM --> SR[摘要 RRF 后取 Top 5]
+    SR --> H{命中可回溯的<br/>section_summary?}
+    H -- 是 --> S[解析 source_chunk_ids<br/>取得代表性原始 child]
+    H -- 否，摘要缺失或不完整 --> META[ACTIVE 文档 + 药品 + 章节]
+    G -- 否 --> META
+    META --> B[正文 BM25 Top 20]
+    META --> V[正文 Qdrant Dense Top 20]
     B --> R[RRF k=60]
     V --> R
-    R --> C[候选正文补全药品/章节/类型]
+    R --> C[原始 child 候选]
+    S --> C
+    P -. 其他 broad 查询在正文召回后<br/>追加摘要导航 .-> C
     C --> X[Cross-Encoder 成对打分]
     X --> T[Top 6，允许配置 5 到 8]
+    SR -. 摘要本身不作为最终引用 .-> X
 ```
 
 BM25 当前实现会读取过滤范围内全部原始 child，在应用层计算标准 BM25：
@@ -438,7 +448,7 @@ RRF(d) = Σ 1 / (60 + rank_i(d))
 
 RRF 只融合名次。Cross-Encoder 才读取 `(query, candidate)` 完整语义，输入显式包含药品、章节、类型和内容。
 
-概括型问题会额外查询最多 5 个摘要，摘要命中分数以 `0.25 / (60 + rank)` 加到其代表性原始 child 上。摘要本身不会进入最终回答证据。
+单药、单明确章节的概括型问题优先查询摘要通道。命中可回溯的 `section_summary` 后，系统直接根据 `source_chunk_ids` 取得代表性原始 child 并进入精排，不再执行正文 BM25 和正文 Qdrant。摘要缺失、不完整或只命中局部 `topic_summary` 时，自动执行正文召回，并保留已取得的摘要候选。其他概括型问题仍以正文召回为主并追加摘要导航。摘要命中分数为 `0.25 / (60 + rank)`，摘要本身不会进入最终回答证据。
 
 ### 6.4 多药问题
 
