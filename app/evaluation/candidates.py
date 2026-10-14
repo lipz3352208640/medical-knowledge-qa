@@ -2,7 +2,7 @@
 
 import argparse
 import json
-import os
+from app.config import setting
 
 from app.storage.mysql import _connect, parse_mysql_url
 
@@ -14,9 +14,9 @@ def main() -> None:
     parser.add_argument("--limit", type=int, default=3, help="Rows per drug and section")
     parser.add_argument("--summary", action="store_true", help="Show active documents and section coverage")
     args = parser.parse_args()
-    mysql_url = os.getenv("MYSQL_URL")
+    mysql_url = setting("MYSQL_URL")
     if not mysql_url:
-        parser.error("MYSQL_URL is required")
+        parser.error("mysql_url in config.yaml is required")
     if args.limit <= 0:
         parser.error("--limit must be positive")
     connection = _connect(parse_mysql_url(mysql_url))

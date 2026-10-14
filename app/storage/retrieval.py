@@ -67,12 +67,14 @@ def _decode_json(value: object) -> Any:
 def list_active_document_ids(
     mysql_url: str,
     requested_ids: list[str] | tuple[str, ...] | None = None,
+    *, include_pending: bool = False,
 ) -> list[str]:
     config = parse_mysql_url(mysql_url)
     connection = _connect(config)
     try:
         with connection.cursor() as cursor:
-            sql = "SELECT id FROM document WHERE version_status='ACTIVE'"
+            statuses = "('ACTIVE','PENDING')" if include_pending else "('ACTIVE')"
+            sql = f"SELECT id FROM document WHERE version_status IN {statuses}"
             params: list[object] = []
             if requested_ids:
                 sql += " AND id IN (" + ",".join(["%s"] * len(requested_ids)) + ")"
@@ -109,21 +111,22 @@ def list_ready_vector_document_ids(
         connection.close()
 
 
-def load_vector_chunks(mysql_url: str, document_id: str) -> list[StoredChunk]:
+def load_vector_chunks(mysql_url: str, document_id: str, *, include_pending: bool = False) -> list[StoredChunk]:
     """Load evidence children and navigation summaries for separate vector channels."""
     config = parse_mysql_url(mysql_url)
     connection = _connect(config)
     try:
         with connection.cursor() as cursor:
+            statuses = "('ACTIVE','PENDING')" if include_pending else "('ACTIVE')"
             cursor.execute(
-                """SELECT c.id, c.document_id, c.section_id, c.parent_id,
+                f"""SELECT c.id, c.document_id, c.section_id, c.parent_id,
                           c.content, c.retrieval_text, c.content_type,
                           c.page_start, c.page_end, c.bbox, c.refs_json,
                           c.metadata_json
                    FROM chunk AS c
                    JOIN document AS d ON d.id=c.document_id
                    WHERE c.document_id=%s AND c.is_parent=FALSE
-                     AND d.version_status='ACTIVE'
+                     AND d.version_status IN {statuses}
                    ORDER BY c.page_start, c.reading_order, c.id""",
                 (document_id,),
             )

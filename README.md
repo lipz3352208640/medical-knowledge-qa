@@ -5,9 +5,16 @@
 ## 安装
 
 ```powershell
-cd D:\medical-knowledge-qa
+cd D:\medical-knowledge\medical-knowledge-qa
 .\.venv\Scripts\python.exe -m pip install -e .
+Copy-Item config.example.yaml config.yaml
 ```
+
+编辑 `config.yaml`，填写 `mysql_url`、`reranker_model`，并将 `rag_internal_token` 设置为与管理后台相同的令牌。`config.yaml` 已被 Git 忽略。请从项目根目录运行以下命令；原有环境变量只作为缺少 YAML 配置项时的兼容后备。
+
+公共知识库的 PDF 从 `medical-knowledge-admin` 后台导入、审核和发布。QA 工程的 `app.worker` 负责异步解析与索引；新导入文档在发布前保持 `PENDING`，不会进入用户问答。先执行 `python -m app.cli init-db` 应用迁移，再单独运行 `python -m app.worker`。`knowledge_import_dir` 可指定原 PDF 持久化目录，默认 `data/imports`。CLI 的 `parse` 和 `index` 命令保留供离线维护使用。
+
+PDF 审核来源映射、修正批次和版本切换的实现说明见 [`../docs/PDF解析与分块审核_实施记录.md`](../docs/PDF解析与分块审核_实施记录.md)。
 
 ## 阶段 2：分块与索引
 
@@ -64,13 +71,12 @@ ollama pull bge-m3:latest
 
 ```powershell
 .\.venv\Scripts\python.exe -m pip install -e '.[rerank]'
-$env:RERANKER_MODEL = 'D:\model\bge-reranker-v2-m'
 .\.venv\Scripts\python.exe -m app.cli retrieve --query '达可替尼的腹泻如何调整剂量？'
 ```
 
 `retrieve` 使用 MySQL 中的药品名与别名解析问题，并按 ACTIVE 文档、药品和章节过滤。人群标签可能缺失于短表格行或剂量段落，因此作为查询线索参与排序，不作为硬排除条件。单药、单明确章节的概括型问题优先查询摘要通道；命中可回溯的章节摘要后直接取得其原始 Child，摘要缺失或不完整时再回退正文召回。其他查询由 BM25 从过滤范围内的原始 Child 计算 Top 20，Qdrant Dense Vector 从状态为 READY、模型和 collection 匹配的文档提供另一组 Top 20。两路名次经 RRF 融合后，由 Cross-Encoder 对 `(问题, 原文候选)` 打分。最终返回 5～8 条原文证据，包含页码、来源引用、两路名次、RRF 分数和精排分数。摘要只用于定位来源，不作为最终证据。
 
-口语问题未识别出标准章节，或首次召回为空/候选过少时，检索器会调用 `qwen3.5:latest` 生成结构化查询改写。原问题与规范问题、扩展问题分别召回，再以原问题更高权重进行 RRF 融合。改写结果必须对齐标准 intent 和章节，并通过药品、数值、等级、否定含义校验；校验失败或 LLM 不可用时自动保留原始检索结果。可设置 `QUERY_REWRITE_ENABLED=false` 关闭。检索调试输出和网页压缩步骤中会显示 `query_rewrite` 决策。
+口语问题未识别出标准章节，或首次召回为空/候选过少时，检索器会调用 `qwen3.5:latest` 生成结构化查询改写。原问题与规范问题、扩展问题分别召回，再以原问题更高权重进行 RRF 融合。改写结果必须对齐标准 intent 和章节，并通过药品、数值、等级、否定含义校验；校验失败或 LLM 不可用时自动保留原始检索结果。可在 `config.yaml` 中设置 `query_rewrite_enabled: false` 关闭。检索调试输出和网页压缩步骤中会显示 `query_rewrite` 决策。
 
 多药比较按药品和章节维度独立检索；无证据的维度返回“当前说明书未检索到相关表述”。目前 BM25 为查询时对过滤范围内的 Child 全量评分，适合现阶段数据量；大规模语料需要迁移到专门的 BM25 倒排索引。
 
@@ -79,8 +85,6 @@ $env:RERANKER_MODEL = 'D:\model\bge-reranker-v2-m'
 本机 Ollama 已准备 `qwen3.5:latest` 时，可以运行：
 
 ```powershell
-$env:RERANKER_MODEL = 'D:\model\bge-reranker-v2-m'
-$env:LLM_MODEL = 'qwen3.5:latest'
 .\.venv\Scripts\python.exe -m app.cli answer --query '达可替尼的腹泻如何调整剂量？'
 ```
 
@@ -90,18 +94,16 @@ $env:LLM_MODEL = 'qwen3.5:latest'
 
 ## 本地网页与 API
 
-安装网页依赖，然后在设置 `MYSQL_URL` 和本地精排模型路径后启动：
+安装网页依赖，在 `config.yaml` 中设置 `mysql_url` 和 `reranker_model` 后启动：
 
 ```powershell
 .\.venv\Scripts\python.exe -m pip install -e '.[web,rerank]'
-$env:MYSQL_URL = 'mysql+pymysql://root:YOUR_PASSWORD@127.0.0.1:3306/medical_qa?charset=utf8mb4'
-$env:RERANKER_MODEL = 'D:\model\bge-reranker-v2-m'
 .\.venv\Scripts\python.exe -m uvicorn app.web.api:app --host 127.0.0.1 --port 8000
 ```
 
-VS Code 可在“运行和调试”中选择 `FastAPI: 调试本地网页` 并按 F5 启动。调试配置使用项目 `.venv` 解释器和根目录下的 `.env`；首次使用时请从 `.env.example` 复制 `.env`，填写 `MYSQL_URL` 和 `RERANKER_MODEL`，并安装 `.[web,rerank]`。
+VS Code 可在“运行和调试”中选择 `启动 药品咨询RAG系统` 并按 F5 启动。调试配置使用项目 `.venv` 解释器和根目录下的 `config.yaml`；首次使用时请从 `config.example.yaml` 复制，并安装 `.[web,rerank]`。
 
-浏览器打开 `http://127.0.0.1:8000/`。页面可提问、按药品筛选、查看答案引用和完整原文。FastAPI 的 `/docs` 提供接口文档；主要接口为 `POST /api/v1/chat/query`、`GET /api/v1/evidence/{chunk_id}` 和 `GET /api/v1/health`。问答接口只支持当前有效的说明书版本；药品筛选支持数据库中已收录药品名及省略剂型的常用写法。设置 `ENABLE_RETRIEVAL_DEBUG=1` 后，才开放 `POST /api/v1/retrieval/debug`。
+浏览器打开 `http://127.0.0.1:8000/`。页面可提问、按药品筛选、查看答案引用和完整原文。FastAPI 的 `/docs` 提供接口文档；主要接口为 `POST /api/v1/chat/query`、`GET /api/v1/evidence/{chunk_id}` 和 `GET /api/v1/health`。问答接口只支持当前有效的说明书版本；药品筛选支持数据库中已收录药品名及省略剂型的常用写法。在 `config.yaml` 中设置 `enable_retrieval_debug: true` 后，才开放 `POST /api/v1/retrieval/debug`。
 
 ## 评测与优化
 
@@ -117,21 +119,19 @@ VS Code 可在“运行和调试”中选择 `FastAPI: 调试本地网页` 并�
 
 评测报告写入 `data/evaluation/latest.json`，分别列出解析结构与来源保留率、BM25 / Vector / RRF / Reranker 的 Recall@K、MRR、nDCG、药品/章节命中、表格行命中、跨药污染，以及回答的引用可回溯率、药品归属、关键词覆盖和拒答检查。`--mode parse` 或 `--mode retrieval` 可单独运行；`--answer-limit N` 可先抽测 N 道问答。自动指标只检查可确定的事实；Faithfulness、相关性和引用是否真正支撑结论，报告保留人工审核字段，不把字符串匹配当作医学正确性的证明。当前样本低于规格第 17.4 节的每药目标数量，扩充时须人工核对原 PDF 和 chunk ID。
 
-默认配置为 `QDRANT_URL=http://127.0.0.1:6333`、
-`OLLAMA_URL=http://127.0.0.1:11434`、`EMBEDDING_MODEL=bge-m3:latest` 和
-`EMBEDDING_DIMENSIONS=1024`。远程 Qdrant 的密钥通过 `QDRANT_API_KEY` 提供，
-不得写入仓库。
-问答模型单次调用默认超时 120 秒，可通过 `OLLAMA_CHAT_TIMEOUT_SECONDS` 调整。
+`config.example.yaml` 中提供 `qdrant_url`、`ollama_url`、`embedding_model` 和
+`embedding_dimensions` 等默认配置。远程 Qdrant 的密钥填写在本地 `config.yaml` 的
+`qdrant_api_key` 中，不要提交该文件。问答模型单次调用默认超时 120 秒，可通过
+`ollama_chat_timeout_seconds` 调整。
 
-依赖为 PyMuPDF、pdfplumber 和 PyMySQL。数据库使用 MySQL 8；设置 `MYSQL_URL` 后执行初始化和导入。初始化命令会在数据库不存在时创建它，并使用 `utf8mb4`：
+依赖为 PyMuPDF、pdfplumber 和 PyMySQL。数据库使用 MySQL 8；在 `config.yaml` 中设置 `mysql_url` 后执行初始化和导入。初始化命令会在数据库不存在时创建它，并使用 `utf8mb4`：
 
 ```powershell
-$env:MYSQL_URL = "mysql+pymysql://root:YOUR_PASSWORD@127.0.0.1:3306/medical_qa?charset=utf8mb4"
 .\.venv\Scripts\python.exe -m app.cli init-db
 .\.venv\Scripts\python.exe -m app.cli parse-samples
 ```
 
-如果暂时不需要落库，可以省略 `MYSQL_URL`，先运行 `parse-samples`。每份文件的 `parsed.json`、`report.json`、表格原图和图片写入 `data/output/<document_id>/`。样本路径见 [samples.json](samples.json)，如本机路径不同可编辑清单。相同文件 hash 与解析器版本重复导入时，数据库返回 `already present`；解析器版本变更则保留另一条记录，并让同一源文件的新版解析结果接替旧版解析结果。
+如果暂时不需要落库，可以将 `mysql_url` 设为 `null`，先运行 `parse-samples`。每份文件的 `parsed.json`、`report.json`、表格原图和图片写入 `data/output/<document_id>/`。样本路径见 [samples.json](samples.json)，如本机路径不同可编辑清单。相同文件 hash 与解析器版本重复导入时，数据库返回 `already present`；解析器版本变更则保留另一条记录，并让同一源文件的新版解析结果接替旧版解析结果。
 
 ## 数据表说明
 
@@ -181,8 +181,8 @@ drug（规范通用药品）
 .\.venv\Scripts\python.exe -m unittest discover -s tests -v
 ```
 
-需要运行真实 MySQL 集成测试时设置 `TEST_MYSQL_URL`。五份 PDF 的解析集成测试耗时较长；普通单元测试未设置该变量时跳过它。
-运行只读的真实问答链路测试时，设置 `MYSQL_URL`、`RERANKER_MODEL` 和 `RUN_LIVE_E2E=1`，再执行 `python -m unittest tests.test_e2e_live -v`。
+需要运行真实 MySQL 集成测试时，将 `config.test.example.yaml` 复制为 `config.test.yaml` 并填写 `test_mysql_url`。五份 PDF 的解析集成测试耗时较长；未配置测试数据库时会跳过。
+运行只读的真实问答链路测试时，还需在 `config.yaml` 中配置 `mysql_url`、`reranker_model`，并在 `config.test.yaml` 中设置 `run_live_e2e: true`，再执行 `python -m unittest tests.test_e2e_live -v`。
 
 ### 断点调试
 
@@ -194,7 +194,7 @@ VS Code/Cursor 已配置使用项目的 `.venv`。在测试或业务代码左侧
 - `Python: 调试 MySQL 集成测试`
 - `Python: 调试五份 PDF 解析命令`
 
-也可以在测试方法上方点击编辑器提供的 `Debug Test`。调试 MySQL 前，将 `.env.test.example` 复制为不会提交的 `.env.test`，并填写测试数据库连接地址。
+也可以在测试方法上方点击编辑器提供的 `Debug Test`。调试 MySQL 前，将 `config.test.example.yaml` 复制为不会提交的 `config.test.yaml`，并填写测试数据库连接地址。
 
 不使用 IDE 时，可以从命令行进入 `pdb`：
 
@@ -207,14 +207,14 @@ VS Code/Cursor 已配置使用项目的 `.venv`。在测试或业务代码左侧
 安装 PDF 依赖后可运行五份真实样本的解析集成测试：
 
 ```powershell
-$env:RUN_PDF_INTEGRATION = "1"
 .\.venv\Scripts\python.exe -m unittest discover -s tests -v
 ```
 
 使用单独的测试数据库验证 MySQL 建表、中文 JSON 和重复导入：
 
 ```powershell
-$env:TEST_MYSQL_URL = "mysql+pymysql://root:YOUR_PASSWORD@127.0.0.1:3306/medical_qa_test?charset=utf8mb4"
+Copy-Item config.test.example.yaml config.test.yaml
+# 编辑 config.test.yaml 中的 test_mysql_url
 .\.venv\Scripts\python.exe -m unittest discover -s tests -v
 ```
 

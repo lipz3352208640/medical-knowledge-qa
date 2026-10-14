@@ -1,6 +1,6 @@
 """Opt-in test against real MySQL, Qdrant, reranker and local Ollama."""
 
-import os
+from app.config import setting
 import unittest
 
 from app.runtime import build_runtime
@@ -8,12 +8,13 @@ from app.storage.retrieval import load_chunks_by_ids
 
 
 @unittest.skipUnless(
-    os.getenv("RUN_LIVE_E2E") == "1" and os.getenv("MYSQL_URL") and os.getenv("RERANKER_MODEL"),
-    "Set RUN_LIVE_E2E=1, MYSQL_URL and RERANKER_MODEL for the live chain",
+    (setting("RUN_LIVE_E2E", test=True) or "").lower() in {"1", "true", "yes"}
+    and setting("MYSQL_URL") and setting("RERANKER_MODEL"),
+    "Set run_live_e2e: true in config.test.yaml and mysql_url/reranker_model in config.yaml",
 )
 class LiveEndToEndTests(unittest.TestCase):
     def test_adverse_overview_keeps_traceable_evidence(self):
-        mysql_url = os.environ["MYSQL_URL"]
+        mysql_url = setting("MYSQL_URL")
         service, _ = build_runtime(mysql_url)
         result = service.answer("坎地沙坦酯片的不良反应有哪些")
         self.assertNotEqual(result.confidence, "low", result.warnings)
@@ -29,7 +30,7 @@ class LiveEndToEndTests(unittest.TestCase):
             self.assertIn(citation["quote"], source.content)
 
     def test_table_row_question_reaches_traceable_answer(self):
-        mysql_url = os.environ["MYSQL_URL"]
+        mysql_url = setting("MYSQL_URL")
         service, _ = build_runtime(mysql_url)
         result = service.answer("达可替尼发生3级腹泻时如何调整剂量？")
         self.assertTrue(result.evidence, result.warnings)

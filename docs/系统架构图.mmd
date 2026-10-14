@@ -1,0 +1,57 @@
+flowchart TB
+    classDef input fill:#ffffff,stroke:#c9d5e3,color:#17324d
+    classDef core fill:#ddf4ef,stroke:#71bdaf,color:#17324d
+    classDef summary fill:#ede8ff,stroke:#a99ad8,color:#3b3266
+    classDef store fill:#fff8e8,stroke:#e2b85a,color:#5b4310
+    classDef model fill:#fff8e8,stroke:#e2b85a,color:#5b4310
+    classDef safety fill:#ffecec,stroke:#e6a0a0,color:#6b2525
+    classDef decision fill:#e7f0ff,stroke:#8ba9d8,color:#17324d
+
+    subgraph OFFLINE[离线知识构建]
+        direction LR
+        PDF[药品说明书 PDF]:::input --> PARSER[版面与结构解析]:::input
+        PARSER --> STRUCT[章节 / 正文 / 表格 / 图片]:::input
+        STRUCT --> CHUNK[主题聚合与父子分块]:::core
+        CHUNK --> MYSQL[(MySQL 8<br/>主数据 · 原文 · 来源)]:::store
+        CHUNK --> SUMMARY[章节摘要 / 主题摘要]:::summary
+        SUMMARY --> MYSQL
+        MYSQL --> EMBED[Ollama bge-m3<br/>1024 维向量]:::model
+        EMBED --> QDRANT[(Qdrant<br/>evidence / summary)]:::summary
+    end
+
+    subgraph ONLINE[在线查询与回答]
+        direction TB
+        UI[Web / CLI]:::input --> QUERY[规则解析与药品别名识别]:::input
+        QUERY -.低置信 / 召回不足.-> REWRITE[受控 LLM 查询改写]:::model
+        QUERY --> FILTER[ACTIVE 文档 / 药品 / 章节过滤]:::input
+        REWRITE --> FILTER
+        FILTER --> INTENT{单药 + 单章节 + overview?}:::decision
+
+        INTENT -->|是| SBM25[摘要 BM25 Top 5]:::summary
+        INTENT -->|是| SDENSE[摘要 Qdrant Top 5]:::summary
+        SBM25 --> SRRF[摘要 RRF 取 Top 5]:::summary
+        SDENSE --> SRRF
+        SRRF --> SUMMARY_OK{可回溯 section_summary?}:::decision
+        SUMMARY_OK -->|是| RESOLVE[解析 source_chunk_ids<br/>回到原始 child]:::summary
+
+        INTENT -->|否| BM25[正文 BM25 Top 20]:::input
+        INTENT -->|否| DENSE[正文 Qdrant Dense Top 20]:::input
+        SUMMARY_OK -->|否：正文兜底| BM25
+        SUMMARY_OK -->|否：正文兜底| DENSE
+        BM25 --> RRF[RRF k = 60]:::core
+        DENSE --> RRF
+        RESOLVE --> MERGE[合并原始 child<br/>摘要只加导航分]:::core
+        RRF --> MERGE
+        MERGE --> RERANK[Cross-Encoder<br/>bge-reranker-v2-m 精排]:::safety
+        RERANK --> EXPAND[父块 / 表格语境 / lead-in / 相邻块扩展]:::input
+        EXPAND --> COMPRESS[条件式上下文压缩<br/>Top 3 · Embedding · LLM · 预算]:::input
+        COMPRESS --> ANSWER[qwen3.5<br/>结构化回答]:::model
+        ANSWER --> VALIDATE[引用 · 数值 · 药品归属 · 安全校验]:::safety
+        VALIDATE --> RESULT[答案 + 原文证据 + 页码 + 警告]:::core
+    end
+
+    MYSQL --> BM25
+    MYSQL --> SBM25
+    MYSQL --> EXPAND
+    QDRANT --> DENSE
+    QDRANT --> SDENSE

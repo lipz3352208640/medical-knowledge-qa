@@ -4,7 +4,24 @@ __pycache__/
 .pytest_cache/
 .env
 .env.test
+.vscode/
+config.yaml
+config.test.yaml
 data/output/
+data/imports/
 data/evaluation/
 data/table-inspect/
+data/admin.sqlite3
+data/rule_snapshot.json
 tmp*/
+data/legacy_admin_code/
+
+# Generated package metadata and local execution output
+*.egg-info/
+*.log
+*.tsbuildinfo
+/build/
+/dist/
+# One-time scripts tied to this local database
+/scripts/inspect_pending_cleanup.py
+/scripts/cleanup_old_pending_versions.py

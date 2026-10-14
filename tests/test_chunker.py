@@ -1,6 +1,7 @@
 import unittest
 
 from app.chunker.parent_child import build_chunks, estimated_token_count
+from app.chunker.source_mapping import map_chunk_sources
 from app.models import (
     ImageRecord,
     ParseResult,
@@ -14,6 +15,24 @@ from app.models import (
 
 
 class ParentChildChunkerTests(unittest.TestCase):
+    def test_drug_name_explicit_field_is_preserved_in_chunk_path(self):
+        for reverse in (False, True):
+            result = self.make_result()
+            section = result.sections[0]
+            section.raw_name, section.normalized_name = "【药品名称】", "药品名称"
+            ref = SourceRef(result.document_id, section.id, 1, (1, 1, 100, 20))
+            fields = ["通用名称：测试药", "商品名称：测试牌", "汉语拼音：Ceshiyao", "英文名称：Test"]
+            if reverse:
+                fields[0], fields[1] = fields[1], fields[0]
+            result.elements = [TextElement("heading", ref, "section_heading", "【药品名称】", "药品名称", 0, 1.0)]
+            result.elements += [TextElement(f"field-{i}", ref, "paragraph", text, text, i+1, 1.0) for i, text in enumerate(fields)]
+            result.tables, result.images = [], []
+            chunks = build_chunks(result, "drug", "product")
+            body = [c for c in chunks if c.content_type in {"topic_parent", "paragraph"}]
+            self.assertTrue(body)
+            self.assertTrue(all(c.section_path == ["药品名称",fields[0].split('：')[0]] for c in body))
+            self.assertTrue(all(c.content.index(fields[0]) < c.content.index(fields[1]) for c in body))
+
     def make_result(self):
         document_id = "doc"
         section_id = "dose-section"
@@ -125,6 +144,44 @@ class ParentChildChunkerTests(unittest.TestCase):
         self.assertEqual(table_row.parent_id, row_group.id)
         self.assertEqual(row_group.parent_id, table_parent.id)
         self.assertIn("不良反应剂量调整", table_row.retrieval_text)
+
+    def test_exact_source_mapping_and_summary_evidence(self):
+        result = self.make_result()
+        chunks = build_chunks(result, "drug-1", "product-1", max_tokens=40, overlap_tokens=5)
+        mapped = map_chunk_sources(result, chunks)
+        paragraph = next(c for c in chunks if c.content_type == "paragraph")
+        segment = mapped[paragraph.id][0]
+        self.assertEqual(segment.element_id, "p1")
+        self.assertEqual(paragraph.content[segment.chunk_start:segment.chunk_end],
+                         result.elements[1].raw_text[segment.element_start:segment.element_end])
+        row = next(c for c in chunks if c.content_type == "table_row")
+        self.assertEqual(mapped[row.id][0].source_kind, "table_row")
+        self.assertEqual(mapped[row.id][0].element_id, "row-1")
+        summaries = [c for c in chunks if c.content_type.endswith("_summary")]
+        self.assertTrue(summaries)
+        self.assertTrue(all(c.bbox is None for c in summaries))
+        self.assertTrue(any(s.source_kind == "summary_evidence"
+                            for c in summaries for s in mapped[c.id]))
+
+    def test_overlapping_sentence_has_repeatable_character_offsets(self):
+        result = self.make_result()
+        result.tables = []
+        result.images = []
+        raw = "肾功能不全时监测。" * 8
+        result.elements[1].raw_text = raw
+        result.elements[1].normalized_text = raw
+        chunks = build_chunks(result, "drug", "product", max_tokens=20, overlap_tokens=8)
+        pieces = [c for c in chunks if c.content_type == "paragraph" and "p1" in c.source_element_ids]
+        mapped = map_chunk_sources(result, chunks)
+        self.assertGreater(len(pieces), 1)
+        starts = []
+        for piece in pieces:
+            segment = mapped[piece.id][0]
+            self.assertEqual(segment.location_status, "LOCATABLE")
+            self.assertEqual(piece.content[segment.chunk_start:segment.chunk_end],
+                             raw[segment.element_start:segment.element_end])
+            starts.append(segment.element_start)
+        self.assertGreater(len(set(starts)), 1)
 
     def test_chunk_ids_are_stable_and_long_text_is_split(self):
         result = self.make_result()

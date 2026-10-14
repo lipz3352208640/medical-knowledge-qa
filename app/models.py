@@ -154,6 +154,8 @@ class ParseResult:
     english_name: ValuePair | None = None
     approval_numbers: list[str] = field(default_factory=list)
     revision_date: str | None = None
+    chunk_policy: dict[str, Any] = field(default_factory=dict)
+    summary_overrides: dict[str, str] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

@@ -1,6 +1,6 @@
 import hashlib
 import json
-import os
+from app.config import setting
 from pathlib import Path
 import unittest
 
@@ -63,13 +63,13 @@ class SampleManifestTests(unittest.TestCase):
         self.assertNotEqual(stable_id(digest, "0.1.0"), stable_id(digest, "0.1.1"))
 
 
-@unittest.skipUnless(os.getenv("TEST_MYSQL_URL"), "Set TEST_MYSQL_URL for PDF integration")
+@unittest.skipUnless(setting("TEST_MYSQL_URL", test=True), "Set test_mysql_url in config.test.yaml for PDF integration")
 class PDFIntegrationTests(unittest.TestCase):
     def test_all_samples_process_chunk(self):
         import tempfile
         from app.parser.pdf import parse_pdf
 
-        mysql_url = os.environ["TEST_MYSQL_URL"]
+        mysql_url = setting("TEST_MYSQL_URL", test=True)
         initialize(mysql_url)
         with tempfile.TemporaryDirectory(dir=ROOT) as temporary:
             for path in SAMPLES:
@@ -154,7 +154,9 @@ class PDFIntegrationTests(unittest.TestCase):
                             self.assertEqual(ref.section_id, chunk.section_id)
                             self.assertLess(ref.bbox[0], ref.bbox[2])
                             self.assertLess(ref.bbox[1], ref.bbox[3])
-                        if chunk.page_start == chunk.page_end:
+                        if chunk.content_type in {"section_summary", "topic_summary"}:
+                            self.assertIsNone(chunk.bbox)
+                        elif chunk.page_start == chunk.page_end:
                             self.assertIsNotNone(chunk.bbox)
                         else:
                             self.assertIsNone(chunk.bbox)

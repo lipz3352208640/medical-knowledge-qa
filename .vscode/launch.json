@@ -14,7 +14,6 @@
         "8000"
       ],
       "cwd": "${workspaceFolder}",
-      "envFile": "${workspaceFolder}/.env",
       "env": {
         "PYTHONIOENCODING": "utf-8"
       },
@@ -62,7 +61,6 @@
       "console": "integratedTerminal",
       "justMyCode": true,
       "env": {
-        "RUN_PDF_INTEGRATION": "1",
         "PYTHONIOENCODING": "utf-8"
       }
     },
@@ -78,7 +76,9 @@
       "cwd": "${workspaceFolder}",
       "console": "integratedTerminal",
       "justMyCode": true,
-      "envFile": "${workspaceFolder}/.env.test"
+      "env": {
+        "PYTHONIOENCODING": "utf-8"
+      }
     },
     {
       "name": "Python: 调试五份 PDF 解析命令",

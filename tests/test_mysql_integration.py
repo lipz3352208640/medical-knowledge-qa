@@ -1,8 +1,8 @@
-import os
+from app.config import setting
 import unittest
 import uuid
 
-from app.models import ParseResult, Section, SourceRef, ValuePair
+from app.models import ParseResult, Section, SourceRef, TextElement, ValuePair
 from app.storage.mysql import ingest, initialize, parse_mysql_url
 
 
@@ -22,13 +22,13 @@ class MySQLConfigTests(unittest.TestCase):
             
 
 
-@unittest.skipUnless(os.getenv("TEST_MYSQL_URL"), "Set TEST_MYSQL_URL for MySQL integration")
+@unittest.skipUnless(setting("TEST_MYSQL_URL", test=True), "Set test_mysql_url in config.test.yaml for MySQL integration")
 class MySQLIntegrationTests(unittest.TestCase):
     def test_migration_and_idempotent_insert(self):
         import json
         import pymysql
 
-        mysql_url = os.environ["TEST_MYSQL_URL"]
+        mysql_url = setting("TEST_MYSQL_URL", test=True)
         initialize(mysql_url)
         token = uuid.uuid4().hex
         document_id = token[:24]
@@ -37,7 +37,9 @@ class MySQLIntegrationTests(unittest.TestCase):
                              ValuePair("测试药品" + token, "测试药品" + token), 1,
                              [Section(section_id, document_id, "【药品名称】", "药品名称", 1, 1,
                                       SourceRef(document_id, section_id, 1, (1, 1, 10, 10)), 1.0)],
-                             [], [], [], [], [])
+                             [TextElement(token[4:28], SourceRef(document_id, section_id, 1, (1, 20, 100, 30)),
+                                          "paragraph", "测试药品应遵医嘱使用。", "测试药品应遵医嘱使用。", 1, 1.0)],
+                             [], [], [], [])
         result.brand_names = [ValuePair("测试商品名", "测试商品名")]
         result.approval_numbers = ["TEST" + token]
         result.revision_date = "2024-01-01"

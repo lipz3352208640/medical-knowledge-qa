@@ -1,0 +1,3 @@
+# Copy to config.test.yaml for integration tests only.
+test_mysql_url: "mysql+pymysql://root:CHANGE_PASSWORD@127.0.0.1:3306/medical_qa_test?charset=utf8mb4"
+run_live_e2e: false

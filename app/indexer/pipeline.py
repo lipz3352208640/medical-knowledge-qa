@@ -46,9 +46,12 @@ def build_vector_index(
     *,
     document_ids: list[str] | None = None,
     recreate_collection: bool = False,
+    include_pending: bool = False,
 ) -> IndexBuildReport:
     """Index active document child chunks and keep failures explicit and recoverable."""
-    active_ids = list_active_document_ids(mysql_url, document_ids)
+    if include_pending and not document_ids:
+        raise ValueError("include_pending requires explicit document_ids")
+    active_ids = list_active_document_ids(mysql_url, document_ids, include_pending=include_pending)
     if document_ids:
         missing = sorted(set(document_ids) - set(active_ids))
         if missing:
@@ -77,7 +80,7 @@ def build_vector_index(
                 collection_name=vector_store.collection_name,
                 point_count=0,
             )
-            chunks = load_vector_chunks(mysql_url, document_id)
+            chunks = load_vector_chunks(mysql_url, document_id, include_pending=include_pending)
             if not chunks:
                 raise ValueError(
                     "No child chunks found; rerun document ingestion after migration 004"

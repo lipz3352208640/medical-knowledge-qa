@@ -345,6 +345,7 @@ def _insert_document(
     result: ParseResult,
     stored_product_id: str,
     stored_drug_id: str,
+    publish: bool = True,
 ) -> None:
     """Insert a new document, selecting its version status under a row lock."""
     cursor.execute(
@@ -357,7 +358,9 @@ def _insert_document(
     new_revision = _revision_date(result.revision_date)
     supersedes_id = None
 
-    if current is None:
+    if not publish:
+        version_status = "PENDING"
+    elif current is None:
         version_status = "ACTIVE"
     else:
         current_id, current_revision, current_hash = current
@@ -424,8 +427,8 @@ def _insert_parsed_content(cursor: object, result: ParseResult) -> None:
         cursor.execute(
             """INSERT INTO element
                (id, document_id, section_id, page, bbox, element_type, raw_text,
-                normalized_text, reading_order, confidence, values_json)
-               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+                normalized_text, reading_order, confidence, values_json, is_bold)
+               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
             (
                 element.id,
                 result.document_id,
@@ -438,6 +441,7 @@ def _insert_parsed_content(cursor: object, result: ParseResult) -> None:
                 element.reading_order,
                 element.confidence,
                 _json([asdict(value) for value in element.values]),
+                element.is_bold,
             ),
         )
     for table in result.tables:
@@ -518,10 +522,111 @@ def _insert_parsed_content(cursor: object, result: ParseResult) -> None:
                 image.confidence,
             ),
         )
+    _insert_parse_audit(cursor, result)
     cursor.execute(
         "INSERT INTO parse_report (document_id, report_json) VALUES (%s,%s)",
         (result.document_id, _json(make_report(result))),
     )
+
+
+def _insert_parse_audit(cursor: object, result: ParseResult) -> None:
+    """Persist immutable run/page/element report rows alongside legacy report JSON."""
+    run_id = stable_id("parse-run", result.document_id, result.parser_version, result.file_hash)
+    status = "NEEDS_REVIEW" if result.failed_pages or result.warnings else "READY"
+    # Re-ingesting the same immutable document is idempotent. Remove the old
+    # report rows first so the deterministic run id can be written again.
+    cursor.execute("DELETE FROM element_report WHERE parse_run_id=%s", (run_id,))
+    cursor.execute("DELETE FROM page_report WHERE parse_run_id=%s", (run_id,))
+    cursor.execute("DELETE FROM parse_run WHERE id=%s", (run_id,))
+    cursor.execute(
+        """INSERT INTO parse_run
+           (id,document_id,document_version,file_hash,parser_version,config_version,
+            status,started_at,finished_at,error_summary)
+           VALUES (%s,%s,%s,%s,%s,%s,%s,NOW(6),NOW(6),%s)""",
+        (run_id, result.document_id, result.revision_date or result.file_hash,
+         result.file_hash, result.parser_version, None, status,
+         _json({"failed_pages": result.failed_pages, "warnings": result.warnings})),
+    )
+    section_paths = {section.id: [section.normalized_name] for section in result.sections}
+    page_text = {}
+    for element in result.elements:
+        page_text[element.ref.page] = page_text.get(element.ref.page, 0) + 1
+        cursor.execute(
+            """INSERT INTO element_report
+               (id,parse_run_id,element_id,page,bbox,bbox_coordinate_system,
+                reading_order,element_type,raw_text,normalized_text,section_path,
+                confidence,source_asset_id,table_id,parent_id,warning_codes)
+               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+            (stable_id("element-report", run_id, element.id), run_id, element.id,
+             element.ref.page, _json(element.ref.bbox), "pdf_points_top_left",
+             element.reading_order, element.element_type, element.raw_text,
+             element.normalized_text, _json(section_paths.get(element.ref.section_id, [])),
+             element.confidence, None, None, None, _json([])),
+        )
+    # Table rows and image captions are first-class sources for retrieval
+    # chunks. Their IDs must resolve through the same run-scoped audit API.
+    for table in result.tables:
+        for row in table.rows:
+            raw = "；".join(str(value or "") for value in row.raw_cells)
+            for ref in row.refs:
+                cursor.execute(
+                    """INSERT INTO element_report
+                       (id,parse_run_id,element_id,page,bbox,bbox_coordinate_system,
+                        reading_order,element_type,raw_text,normalized_text,section_path,
+                        confidence,source_asset_id,table_id,parent_id,warning_codes)
+                       VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+                    (stable_id("element-report", run_id, row.id, ref.page), run_id,
+                     row.id, ref.page, _json(ref.bbox), "pdf_points_top_left",
+                     row.row_index, "table_row", raw, raw,
+                     _json(section_paths.get(table.section_id, [])), 1.0,
+                     None, table.id, None, _json([])),
+                )
+        from app.review.table_audit import cell_id
+        grid=table.raw_json.get('audit_cells') or [dict(row=c.row,column=c.column,page=c.ref.page,bbox=list(c.ref.bbox),text=c.raw or '') for c in table.cells]
+        for cell in grid:
+            key=cell_id(table.id,cell['row'],cell['column'])
+            cursor.execute('''INSERT INTO element_report
+                (id,parse_run_id,element_id,page,bbox,bbox_coordinate_system,reading_order,element_type,
+                 raw_text,normalized_text,section_path,confidence,source_asset_id,table_id,parent_id,warning_codes)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)''',
+                (stable_id('element-report',run_id,key),run_id,key,cell['page'],_json(cell.get('bbox')),
+                 'pdf_points_top_left',cell['row']*1000+cell['column'],'table_cell',cell['text'],cell['text'],
+                 _json([]),1.0,None,table.id,None,_json([])))
+    for image in result.images:
+        if not image.caption or not image.caption.strip():
+            continue
+        cursor.execute(
+            """INSERT INTO element_report
+               (id,parse_run_id,element_id,page,bbox,bbox_coordinate_system,
+                reading_order,element_type,raw_text,normalized_text,section_path,
+                confidence,source_asset_id,table_id,parent_id,warning_codes)
+               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+            (stable_id("element-report", run_id, image.id), run_id,
+             image.id, image.ref.page, _json(image.ref.bbox),
+             "pdf_points_top_left", 0, "image_caption", image.caption,
+             image.caption, _json(section_paths.get(image.ref.section_id, [])),
+             image.confidence, image.id, None, None, _json([])),
+        )
+    page_tables: dict[int, int] = {}
+    for table in result.tables:
+        for ref in table.refs:
+            page_tables[ref.page] = page_tables.get(ref.page, 0) + 1
+    page_images: dict[int, int] = {}
+    for image in result.images:
+        page_images[image.ref.page] = page_images.get(image.ref.page, 0) + 1
+    for page in range(1, result.page_count + 1):
+        warnings = []
+        if page in result.failed_pages:
+            warnings.append("page_parse_failed")
+        if page in result.blank_pages:
+            warnings.append("blank_page")
+        cursor.execute(
+            """INSERT INTO page_report
+               (parse_run_id,page,width,height,text_count,table_count,image_count,warnings_json)
+               VALUES (%s,%s,%s,%s,%s,%s,%s,%s)""",
+            (run_id, page, None, None, page_text.get(page, 0), page_tables.get(page, 0),
+             page_images.get(page, 0), _json(warnings)),
+        )
 
 
 def _replace_chunks(
@@ -531,7 +636,11 @@ def _replace_chunks(
     stored_product_id: str,
 ) -> int:
     """Rebuild one document's deterministic chunks inside the ingest transaction."""
+    from app.chunker.source_mapping import map_chunk_sources
+
     chunks = build_chunks(result, stored_drug_id, stored_product_id)
+    source_segments = map_chunk_sources(result, chunks)
+    parse_run_id = stable_id("parse-run", result.document_id, result.parser_version, result.file_hash)
     manifest_payload = "|".join(
         f"{chunk.id}:{chunk.content_hash}:"
         f"{hashlib.sha256(_json(chunk.metadata).encode('utf-8')).hexdigest()}"
@@ -573,6 +682,19 @@ def _replace_chunks(
                 chunk.chunker_version,
             ),
         )
+        for ordinal, segment in enumerate(source_segments[chunk.id]):
+            cursor.execute(
+                """INSERT INTO chunk_source_segment
+                   (chunk_id,parse_run_id,index_version,ordinal,element_id,source_id,
+                    source_kind,page_number,bbox,element_start,element_end,
+                    chunk_start,chunk_end,location_status)
+                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+                (chunk.id, parse_run_id, manifest_hash, ordinal,
+                 segment.element_id, segment.source_id, segment.source_kind,
+                 segment.page_number, _json(segment.bbox) if segment.bbox else None,
+                 segment.element_start, segment.element_end, segment.chunk_start,
+                 segment.chunk_end, segment.location_status),
+            )
 
     if existing_state is None:
         cursor.execute(
@@ -652,7 +774,7 @@ def initialize(mysql_url: str) -> None:
 """Database model: drug -> drug_product -> document, with aliases and approvals."""
 
 
-def ingest(result: ParseResult, mysql_url: str) -> bool:
+def ingest(result: ParseResult, mysql_url: str, *, publish: bool = True) -> bool:
     """Persist one parse result atomically.
 
     True means a new document was inserted. False means the same
@@ -668,13 +790,14 @@ def ingest(result: ParseResult, mysql_url: str) -> bool:
             existing = _find_existing_document(cursor, result)
 
             if existing:
-                _update_existing_document(
-                    cursor,
-                    result,
-                    stored_product_id,
-                    stored_drug_id,
-                    existing,
-                )
+                if publish:
+                    _update_existing_document(
+                        cursor,
+                        result,
+                        stored_product_id,
+                        stored_drug_id,
+                        existing,
+                    )
                 is_new_document = False
             else:
                 _insert_document(
@@ -682,6 +805,7 @@ def ingest(result: ParseResult, mysql_url: str) -> bool:
                     result,
                     stored_product_id,
                     stored_drug_id,
+                    publish=publish,
                 )
                 _insert_parsed_content(cursor, result)
                 is_new_document = True
@@ -702,13 +826,5 @@ def ingest(result: ParseResult, mysql_url: str) -> bool:
         raise
     finally:
         connection.close()
-
-
-
-
-
-
-
-
 
 

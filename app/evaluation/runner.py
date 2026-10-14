@@ -3,7 +3,7 @@
 import argparse
 from datetime import datetime, timezone
 import json
-import os
+from app.config import setting
 from pathlib import Path
 import time
 
@@ -237,9 +237,9 @@ def main() -> None:
     args = parser.parse_args()
     if args.answer_limit < 0:
         parser.error("--answer-limit cannot be negative")
-    mysql_url = os.getenv("MYSQL_URL")
+    mysql_url = setting("MYSQL_URL")
     if not mysql_url:
-        parser.error("MYSQL_URL is required")
+        parser.error("mysql_url in config.yaml is required")
     gold = json.loads(args.dataset.read_text(encoding="utf-8"))
     if gold.get("version") != 1:
         parser.error("Unsupported golden dataset version")

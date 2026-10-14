@@ -2,7 +2,7 @@
 
 import argparse
 import json
-import os
+from app.config import setting
 from pathlib import Path
 
 from app.evaluation.runner import _drug_id
@@ -18,9 +18,9 @@ def main() -> None:
     parser.add_argument("case_id")
     parser.add_argument("--dataset", type=Path, default=Path("evaluation/golden.json"))
     args = parser.parse_args()
-    mysql_url = os.getenv("MYSQL_URL")
+    mysql_url = setting("MYSQL_URL")
     if not mysql_url:
-        parser.error("MYSQL_URL is required")
+        parser.error("mysql_url in config.yaml is required")
     gold = json.loads(args.dataset.read_text(encoding="utf-8"))
     case = next((item for item in gold["retrieval_cases"] if item["id"] == args.case_id), None)
     if case is None:

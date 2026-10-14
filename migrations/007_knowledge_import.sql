@@ -1,0 +1,3 @@
+ALTER TABLE rag_job
+    MODIFY kind ENUM('REPROCESS','INDEX','IMPORT') NOT NULL,
+    MODIFY document_id CHAR(24) NULL;

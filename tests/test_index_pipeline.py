@@ -38,6 +38,20 @@ class _VectorStore:
 
 
 class IndexPipelineTests(unittest.TestCase):
+    def test_pending_documents_can_only_be_indexed_by_id(self):
+        with self.assertRaisesRegex(ValueError, "explicit document_ids"):
+            build_vector_index("mysql://unused", _Embedder(), _VectorStore(), include_pending=True)
+        with (
+            patch("app.indexer.pipeline.list_active_document_ids", return_value=["pending-1"]) as ids,
+            patch("app.indexer.pipeline.load_vector_chunks", return_value=[]) as chunks,
+            patch("app.indexer.pipeline.set_vector_index_state"),
+        ):
+            report = build_vector_index("mysql://unused", _Embedder(), _VectorStore(),
+                                        document_ids=["pending-1"], include_pending=True)
+        self.assertEqual(report.failed_count, 1)
+        ids.assert_called_once_with("mysql://unused", ["pending-1"], include_pending=True)
+        chunks.assert_called_once_with("mysql://unused", "pending-1", include_pending=True)
+
     def test_indexes_active_documents_and_prunes_stale_points(self):
         chunk = StoredChunk(
             "chunk-1",

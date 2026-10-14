@@ -4,6 +4,7 @@ from dataclasses import asdict, dataclass
 import re
 
 from app.parser.normalize import normalize_section
+from app.rules.runtime import REQUEST_RULE_SNAPSHOT
 
 
 _SECTION_RULES = (
@@ -208,6 +209,28 @@ def parse_query(query: str, aliases: list[tuple[str, str]]) -> ParsedQuery:
         intent = sections[0]
     else:
         intent = "fact"
+    published = REQUEST_RULE_SNAPSHOT.get()
+    if published:
+        matches = []
+        for rule in published.get("rules", []):
+            if not rule.get("enabled") or any(term in lower for term in rule.get("exclusions", [])):
+                continue
+            phrases = [term.casefold() for term in rule.get("phrases", []) if term]
+            kind = rule.get("match_type")
+            hit = any(lower == term for term in phrases) if kind == "exact" else (
+                any(term in lower.split() for term in phrases) if kind == "token" else
+                any(term in lower for term in phrases)
+            )
+            if hit:
+                matches.append(rule)
+        matches.sort(key=lambda rule: (-rule.get("priority", 0), rule.get("id", "")))
+        if matches:
+            hints = tuple(normalize_section(value) for value in matches[0].get("section_hints", []))
+            sections = tuple(dict.fromkeys(sections + hints))
+            if not exact and not comparison:
+                intent = matches[0]["intent_code"]
+                if intent in {"overview", "broad"}:
+                    broad = True
     return ParsedQuery(
         tuple(drugs),
         intent,

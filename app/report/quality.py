@@ -36,6 +36,8 @@ def make_report(result: ParseResult) -> dict:
         "blank_pages": result.blank_pages,
         "review_required": bool(result.failed_pages or result.warnings),
         "warnings": result.warnings,
+        "chunk_policy": result.chunk_policy,
+        "summary_overrides": result.summary_overrides,
         "pages": [{"page": page, "elements": page_elements[page], "tables": page_tables[page],
                    "images": page_images[page], "blank": page in result.blank_pages,
                    "review_required": page in result.failed_pages or (page_elements[page] == 0 and page not in result.blank_pages)}

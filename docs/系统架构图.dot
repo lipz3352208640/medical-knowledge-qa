@@ -1,0 +1,129 @@
+digraph MedicalKnowledgeQA {
+    graph [
+        rankdir=TB,
+        bgcolor="#F7FAFC",
+        pad="0.35",
+        nodesep="0.34",
+        ranksep="0.72",
+        fontname="Microsoft YaHei",
+        fontsize=20,
+        labelloc="t",
+        label="医药知识问答系统 · MVP 架构与检索路径"
+    ];
+
+    node [
+        shape=box,
+        style="rounded,filled",
+        color="#C9D5E3",
+        fillcolor="#FFFFFF",
+        fontcolor="#17324D",
+        fontname="Microsoft YaHei",
+        fontsize=13,
+        margin="0.18,0.12"
+    ];
+
+    edge [
+        color="#6B7C93",
+        penwidth=1.25,
+        arrowsize=0.72,
+        fontname="Microsoft YaHei",
+        fontsize=10,
+        fontcolor="#526579"
+    ];
+
+    subgraph cluster_offline {
+        label="离线知识构建";
+        color="#8CCFC2";
+        fillcolor="#EAF8F4";
+        style="rounded,filled";
+        penwidth=1.5;
+        fontcolor="#126B61";
+        fontsize=16;
+
+        pdf [label="药品说明书\nPDF", fillcolor="#FFFFFF"];
+        parser [label="版面与结构解析", fillcolor="#FFFFFF"];
+        struct [label="章节 · 正文\n表格 · 图片", fillcolor="#FFFFFF"];
+        chunk [label="主题聚合与\n父子分块", fillcolor="#DDF4EF", color="#71BDAF"];
+        summary [label="章节摘要 /\n主题摘要", fillcolor="#E7F0FF", color="#8BA9D8"];
+        mysql [label="MySQL 8\n主数据 · 原文 · 来源", shape=cylinder, fillcolor="#FFF8E8", color="#E2B85A"];
+        embed [label="Ollama bge-m3\n1024 维向量", fillcolor="#F1ECFF", color="#A99AD8"];
+        qdrant [label="Qdrant\nevidence / summary", shape=cylinder, fillcolor="#F1ECFF", color="#A99AD8"];
+
+        pdf -> parser -> struct -> chunk;
+        chunk -> mysql;
+        chunk -> summary -> mysql;
+        mysql -> embed -> qdrant;
+    }
+
+    subgraph cluster_online {
+        label="在线查询与回答";
+        color="#9AB7E8";
+        fillcolor="#F0F5FF";
+        style="rounded,filled";
+        penwidth=1.5;
+        fontcolor="#315C9A";
+        fontsize=16;
+
+        ui [label="Web / CLI", fillcolor="#FFFFFF"];
+        query [label="规则解析与\n药品别名识别", fillcolor="#FFFFFF"];
+        rewrite [label="受控 LLM\n查询改写", fillcolor="#FFF8E8", color="#E2B85A"];
+        filter [label="ACTIVE 文档 /\n药品 / 章节过滤", fillcolor="#FFFFFF"];
+        route [label="单药 + 单章节 + overview?", shape=diamond, fillcolor="#E7F0FF", color="#8BA9D8"];
+
+        subgraph cluster_evidence {
+            label="正文召回（主证据）";
+            color="#C9D5E3";
+            fillcolor="#FFFFFF";
+            style="rounded,filled,dashed";
+            fontsize=12;
+            bm25 [label="BM25\nTop 20", fillcolor="#FFFFFF"];
+            dense [label="Qdrant Dense\nTop 20", fillcolor="#FFFFFF"];
+            rrf [label="RRF\nk = 60", fillcolor="#DDF4EF", color="#71BDAF"];
+            bm25 -> rrf;
+            dense -> rrf;
+        }
+
+        subgraph cluster_summary {
+            label="摘要路由（导航）";
+            color="#B7A9E2";
+            fillcolor="#FBF9FF";
+            style="rounded,filled,dashed";
+            fontsize=12;
+            sbm25 [label="摘要 BM25\nTop 5", fillcolor="#FFFFFF"];
+            sdense [label="摘要 Qdrant\nTop 5", fillcolor="#FFFFFF"];
+            srrf [label="摘要 RRF\n取 Top 5", fillcolor="#EDE8FF", color="#A99AD8"];
+            resolve [label="解析 source_chunk_ids\n回到原始 child", fillcolor="#EDE8FF", color="#A99AD8"];
+            sbm25 -> srrf;
+            sdense -> srrf;
+            srrf -> resolve;
+        }
+
+        merge [label="合并原始 child\n（摘要只加导航分）", fillcolor="#DDF4EF", color="#71BDAF"];
+        rerank [label="Cross-Encoder\nbge-reranker-v2-m", fillcolor="#FFECEC", color="#E6A0A0"];
+        expand [label="父块 / 表格语境\nlead-in / 相邻块扩展", fillcolor="#FFFFFF"];
+        compress [label="条件式上下文压缩\nTop 3 · Embedding · LLM · 预算", fillcolor="#FFFFFF"];
+        answer [label="qwen3.5\n结构化回答", fillcolor="#FFF8E8", color="#E2B85A"];
+        validate [label="引用 · 数值 · 药品归属\n安全校验", fillcolor="#FFECEC", color="#E6A0A0"];
+        result [label="答案 + 原文证据\n页码 + 警告", fillcolor="#DDF4EF", color="#71BDAF"];
+
+        ui -> query;
+        query -> filter;
+        query -> rewrite [style=dashed, label="低置信 / 召回不足"];
+        rewrite -> filter;
+        filter -> route;
+        route -> sbm25 [label="是"];
+        route -> bm25 [label="否"];
+        resolve -> merge;
+        rrf -> merge;
+        merge -> rerank -> expand -> compress -> answer -> validate -> result;
+        srrf -> bm25 [style=dashed, color="#A99AD8", label="无有效 section_summary\n正文兜底"];
+        filter -> sbm25 [style=invis];
+    }
+
+    mysql -> bm25 [color="#D2A63D", label="原文检索"];
+    mysql -> sbm25 [color="#D2A63D", label="摘要检索"];
+    mysql -> expand [color="#D2A63D", label="来源回溯"];
+    qdrant -> dense [color="#8C7AC2", label="evidence"];
+    qdrant -> sdense [color="#8C7AC2", label="summary"];
+    qdrant -> ui [style=invis, weight=20];
+}

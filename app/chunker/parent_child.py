@@ -23,7 +23,7 @@ DEFAULT_MAX_TOKENS = 400
 DEFAULT_OVERLAP_TOKENS = 60
 DEFAULT_PARENT_SOFT_MAX_TOKENS = 1200
 _SENTENCE = re.compile(r"[^。！？!?；;]+[。！？!?；;]?|[。！？!?；;]+")
-_NOISE = {"header", "footer", "page_number", "table_text"}
+_NOISE = {"header", "footer", "page_number", "table_text", "excluded_from_retrieval"}
 _TOPICS = (
     "间质性肺病",
     "肾功能不全",
@@ -125,6 +125,7 @@ class _Block:
     topic_reason: str = ""
     split_reason: str = "paragraph_boundary"
     lead_source_id: str | None = None
+    source_offset: int = 0
 
 
 def _subheading(element: TextElement) -> str | None:
@@ -161,11 +162,56 @@ def _subheading(element: TextElement) -> str | None:
 """
 
 
-def _blocks(section: Section, elements: list[TextElement]) -> list[_Block]:
+def _blocks(section: Section, elements: list[TextElement],
+            excluded: set[str] | None = None,
+            force_split_after: set[str] | None = None,
+            heading_parents: dict[str, str] | None = None,
+            element_split_groups: list[list[str]] | None = None) -> list[_Block]:
     blocks: list[_Block] = []
     pending: list[TextElement] = []
     path = [section.normalized_name]
     lead: str | None = None
+    excluded = excluded or set()
+    force_split_after = force_split_after or set()
+    heading_parents = heading_parents or {}
+    by_id = {item.id: item for item in elements}
+    # Multiple editable Elements can still represent one original semantic unit.
+    # Group only known split lineage; unrelated paragraphs retain normal rules.
+    from copy import copy
+    grouped = {}
+    continuations = set()
+    positions={e.id:i for i,e in enumerate(sorted(elements,key=lambda e:(e.ref.page,e.reading_order)))}
+    for ids in element_split_groups or []:
+        members=[by_id[key] for key in ids if key in by_id and key not in excluded]
+        if len(members)<2 or len({e.ref.page for e in members})!=1:
+            continue
+        indices=[positions[e.id] for e in members]
+        if any(b!=a+1 for a,b in zip(indices,indices[1:])) or any(e.id in heading_parents or e.id in force_split_after for e in members[:-1]):
+            continue
+        grouped[members[0].id]=members
+        continuations.update(e.id for e in members[1:])
+    units=[]
+    for element in elements:
+        if element.id in continuations:continue
+        if element.id in grouped:
+            unit=copy(element)
+            unit.raw_text=''.join(e.raw_text for e in grouped[element.id])
+            unit.normalized_text=unit.raw_text
+            units.append(unit)
+        else:units.append(element)
+    def sources(item):return grouped.get(item.id,[item])
+    def boundary(item):return any(e.id in force_split_after for e in sources(item))
+
+    def parent_path(element_id: str, seen: set[str] | None = None) -> list[str]:
+        seen = set() if seen is None else seen
+        if element_id in seen or element_id not in by_id:
+            raise ValueError("标题归属存在循环或父级不在当前章节")
+        seen.add(element_id)
+        item = by_id[element_id]
+        prefix = parent_path(heading_parents[element_id], seen) if element_id in heading_parents else [section.normalized_name]
+        if item.element_type != "section_heading":
+            prefix.append(_subheading(item) or item.raw_text.strip())
+        return prefix
 
     # 将正文合并成一个块
     def flush() -> None:
@@ -177,14 +223,13 @@ def _blocks(section: Section, elements: list[TextElement]) -> list[_Block]:
         blocks.append(
             _Block(
                 raw,
-                [e.ref for e in pending],
-                [e.id for e in pending],
+                [member.ref for e in pending for member in sources(e)],
+                [member.id for e in pending for member in sources(e)],
                 first.element_type,
                 first.ref.page * 100_000 + first.reading_order,
                 path.copy(),
-                split_reason="list_item_boundary"
-                if first.element_type == "list_item"
-                else "paragraph_boundary",
+                split_reason="review_boundary" if boundary(pending[-1]) else (
+                    "list_item_boundary" if first.element_type == "list_item" else "paragraph_boundary"),
                 lead_source_id=lead if first.element_type == "list_item" else None,
             )
         )
@@ -195,9 +240,13 @@ def _blocks(section: Section, elements: list[TextElement]) -> list[_Block]:
         )
         pending.clear()
 
-    for element in sorted(elements, key=lambda e: (e.ref.page, e.reading_order)):
-        if element.element_type in _NOISE or not element.raw_text.strip():
+    for element in sorted(units, key=lambda e: (e.ref.page, e.reading_order)):
+        if element.id in excluded or element.element_type in _NOISE or not element.raw_text.strip():
             continue
+        assigned_path = parent_path(heading_parents[element.id]) if element.id in heading_parents else None
+        if assigned_path is not None:
+            flush()
+            path = assigned_path
         if element.element_type == "section_heading":
             flush()
             inline = re.match(r"^【[^】]+】\s*(.+)$", element.raw_text.strip())
@@ -205,8 +254,8 @@ def _blocks(section: Section, elements: list[TextElement]) -> list[_Block]:
                 blocks.append(
                     _Block(
                         inline.group(1),
-                        [element.ref],
-                        [element.id],
+                        [member.ref for member in sources(element)],
+                        [member.id for member in sources(element)],
                         "paragraph",
                         element.ref.page * 100_000 + element.reading_order,
                         path.copy(),
@@ -217,12 +266,12 @@ def _blocks(section: Section, elements: list[TextElement]) -> list[_Block]:
         heading = _subheading(element)
         if heading:
             flush()
-            path = [section.normalized_name, _SUBHEADING_ALIASES.get(heading, heading)]
+            path = [*(assigned_path or [section.normalized_name]), _SUBHEADING_ALIASES.get(heading, heading)]
             blocks.append(
                 _Block(
                     element.raw_text.strip(),
-                    [element.ref],
-                    [element.id],
+                    [member.ref for member in sources(element)],
+                    [member.id for member in sources(element)],
                     "subsection_heading",
                     element.ref.page * 100_000 + element.reading_order,
                     path.copy(),
@@ -241,6 +290,9 @@ def _blocks(section: Section, elements: list[TextElement]) -> list[_Block]:
         if pending and pending[0].element_type != element.element_type:
             flush()
         pending.append(element)
+        if boundary(element):
+            flush()
+            continue
         # PDF lines can continue across a page; only punctuation or structure ends a unit.
         if re.search(r"[。！？!?；;]\s*$", element.raw_text):
             flush()
@@ -273,6 +325,8 @@ def _assign_topics(blocks: list[_Block], section: Section) -> None:
             block.topic_reason = "subheading"
         else:
             candidate = _topic_candidate(block.raw)
+            # Keep explicit field labels as topic levels. A correction replay
+            # must not collapse existing 药品名称 / 通用名称 paths.
             if candidate and (
                 candidate not in _TREATMENT or current == section.normalized_name
             ):
@@ -305,25 +359,25 @@ def _assign_topics(blocks: list[_Block], section: Section) -> None:
 
 def _fallback(
     block: _Block, max_tokens: int, overlap_tokens: int
-) -> list[tuple[str, str, bool]]:
+) -> list[tuple[str, str, bool, int, int]]:
     """Sentence-boundary fallback. An indivisible long sentence stays whole and flagged."""
     if estimated_token_count(block.raw) <= max_tokens:
-        return [(block.raw, block.split_reason, False)]
-    sentences = [m.group() for m in _SENTENCE.finditer(block.raw) if m.group().strip()]
+        return [(block.raw, block.split_reason, False, 0, len(block.raw))]
+    sentences = [(m.group(), m.start(), m.end()) for m in _SENTENCE.finditer(block.raw) if m.group().strip()]
     if len(sentences) <= 1:
-        return [(block.raw, "oversized_sentence", False)]
-    groups: list[list[str]] = []
-    current: list[str] = []
+        return [(block.raw, "oversized_sentence", False, 0, len(block.raw))]
+    groups: list[list[tuple[str, int, int]]] = []
+    current: list[tuple[str, int, int]] = []
     for sentence in sentences:
         if (
             current
-            and estimated_token_count("".join([*current, sentence])) > max_tokens
+            and estimated_token_count("".join(item[0] for item in [*current, sentence])) > max_tokens
         ):
             groups.append(current)
             current = []
             if (
                 overlap_tokens
-                and estimated_token_count(groups[-1][-1] + sentence) <= max_tokens
+                and estimated_token_count(groups[-1][-1][0] + sentence[0]) <= max_tokens
             ):
                 current.append(groups[-1][-1])
         current.append(sentence)
@@ -331,7 +385,11 @@ def _fallback(
         groups.append(current)
     result = []
     for index, group in enumerate(groups):
-        raw = "".join(group).strip()
+        start, end = group[0][1], group[-1][2]
+        original = block.raw[start:end]
+        raw = original.strip()
+        start += len(original) - len(original.lstrip())
+        end -= len(original) - len(original.rstrip())
         reason = (
             "oversized_sentence"
             if estimated_token_count(raw) > max_tokens
@@ -340,7 +398,7 @@ def _fallback(
         overlapped = index > 0 and bool(
             overlap_tokens and group[0] == groups[index - 1][-1]
         )
-        result.append((raw, reason, overlapped))
+        result.append((raw, reason, overlapped, start, end))
     return result
 
 
@@ -515,7 +573,7 @@ def _split_oversized_blocks(blocks: list[_Block], soft_max_tokens: int) -> list[
         if estimated_token_count(block.raw) <= soft_max_tokens:
             expanded.append(block)
             continue
-        for part, _, _ in _fallback(block, soft_max_tokens, 0):
+        for part, _, _, start, _ in _fallback(block, soft_max_tokens, 0):
             expanded.append(
                 _Block(
                     part,
@@ -528,6 +586,7 @@ def _split_oversized_blocks(blocks: list[_Block], soft_max_tokens: int) -> list[
                     block.topic_reason,
                     "sentence_boundary",
                     block.lead_source_id,
+                    block.source_offset + start,
                 )
             )
     return expanded
@@ -560,6 +619,7 @@ def _group_topic_blocks(
         )
         if (
             block.kind == "subsection_heading"
+            or block.split_reason == "review_boundary"
             or current[-1].topic != block.topic
             or current[-1].path != block.path
             or over_limit
@@ -580,7 +640,7 @@ def _block_children(
     children: list[ChunkRecord] = []
     previous_piece: ChunkRecord | None = None
     heading = heading_by_path.get(tuple(block.path[:2]))
-    for piece_index, (piece, reason, overlapped) in enumerate(
+    for piece_index, (piece, reason, overlapped, start, end) in enumerate(
         _fallback(block, context.max_tokens, context.overlap_tokens)
     ):
         child = _chunk(
@@ -612,6 +672,8 @@ def _block_children(
         child.metadata["normalized_subsection_name"] = (
             block.path[1] if heading else None
         )
+        child.metadata["source_text_start"] = block.source_offset + start
+        child.metadata["source_text_end"] = block.source_offset + end
         children.append(child)
         previous_piece = child
 
@@ -686,7 +748,10 @@ def _section_chunks(
     section: Section,
     elements: list[TextElement],
 ) -> tuple[list[ChunkRecord], list[ChunkRecord]]:
-    blocks = _blocks(section, elements)
+    policy = context.result.chunk_policy
+    blocks = _blocks(section, elements, set(policy.get("exclude_element_ids", [])),
+                     set(policy.get("force_split_after_ids", [])), policy.get("heading_parents", {}),
+                     policy.get("element_split_groups", []))
     _assign_topics(blocks, section)
     blocks = _split_oversized_blocks(blocks, context.parent_soft_max_tokens)
     groups = _group_topic_blocks(blocks, context.parent_soft_max_tokens)
@@ -942,6 +1007,11 @@ def build_chunks(
 
     for table in result.tables:
         table_parents, table_children = _table_chunks(context, table)
+        from app.review.table_audit import cell_id
+        cells=table.raw_json.get('audit_cells') or [dict(row=c.row,column=c.column,text=c.raw or '',rowspan=1,colspan=1) for c in table.cells]
+        rows={row.id:row.row_index for row in table.rows}
+        for chunk in [*table_parents,*table_children]:
+            chunk.metadata['cell_ids']=[cell_id(table.id,c['row'],c['column']) for c in cells if table.id in chunk.source_element_ids or any(rows.get(key)==c['row'] for key in chunk.source_element_ids)]
         parents.extend(table_parents)
         children.extend(table_children)
 
@@ -951,13 +1021,68 @@ def build_chunks(
             parents.append(parent)
             children.append(child)
 
+    if result.chunk_policy.get("chunk_operations"):
+        from app.review.chunk_operations import apply_chunk_operations
+        children = apply_chunk_operations(result, children)
+        # Rebuild affected retrieval parents so moved/merged evidence is not
+        # served through a stale parent body. Children retain exact PDF refs.
+        affected = {key for c in children for key in c.metadata.get("audit_previous_parent_ids", [])}
+        retained = []
+        for parent in parents:
+            if parent.id not in affected:
+                retained.append(parent)
+                continue
+            members = sorted((c for c in children if c.parent_id == parent.id), key=lambda c: (c.reading_order, c.id))
+            if not members:
+                continue
+            parent.source_element_ids = list(dict.fromkeys(key for c in members for key in c.source_element_ids))
+            parent.content = "\n".join(c.content for c in members)
+            parent.retrieval_text = parent.content
+            parent.refs = _unique_refs([ref for c in members for ref in c.refs])
+            parent.page_start = min(ref.page for ref in parent.refs)
+            parent.page_end = max(ref.page for ref in parent.refs)
+            parent.bbox = _bbox(parent.refs)
+            parent.token_count = estimated_token_count(parent.content)
+            parent.content_hash = _hash(parent.content)
+            parent.id = stable_id(result.document_id, "parent-review", parent.parent_type, *parent.source_element_ids, parent.content_hash)
+            parent.metadata.update(raw_text=parent.content, source_element_ids=parent.source_element_ids.copy(), content_hash=parent.content_hash)
+            for child in members:
+                child.parent_id = parent.id
+                child.metadata["parent_id"] = parent.id
+            retained.append(parent)
+        parents = retained
     parent_ids = {parent.id for parent in parents}
     if any(child.parent_id not in parent_ids for child in children):
         raise AssertionError("Every child must have a stored parent")
     summaries = build_summary_chunks(
         result, children, drug_id, product_id, CHUNKER_VERSION
     )
+    applied_overrides: set[str] = set()
+    for summary in summaries:
+        key = "|".join((summary.content_type, summary.normalized_section_name,
+                        summary.topic_name or ""))
+        replacement = result.summary_overrides.get(key)
+        if replacement:
+            applied_overrides.add(key)
+            summary.content = replacement
+            summary.retrieval_text = replacement
+            summary.content_hash = _hash(replacement)
+            summary.id = stable_id(result.document_id, "summary-review", CHUNKER_VERSION,
+                                   key, summary.content_hash)
+            summary.token_count = estimated_token_count(replacement)
+            summary.metadata["content_hash"] = summary.content_hash
+            summary.metadata["raw_text"] = replacement
+            summary.metadata["summary_edit_version"] = result.parser_version
+    if set(result.summary_overrides) - applied_overrides:
+        raise ValueError("摘要目标在新版本中不存在，需人工重新核对")
+    if result.chunk_policy.get("chunk_operations"):
+        from app.review.chunk_operations import apply_chunk_operations
+        reviewed = apply_chunk_operations(result, [*parents, *children, *summaries], phase="metadata")
+        parents = sorted((chunk for chunk in reviewed if chunk.is_parent), key=lambda chunk: (chunk.reading_order, chunk.id))
+        combined = [chunk for chunk in reviewed if not chunk.is_parent]
+    else:
+        combined = [*children, *summaries]
     return [
         *parents,
-        *sorted([*children, *summaries], key=lambda chunk: (chunk.reading_order, chunk.id)),
+        *sorted(combined, key=lambda chunk: (chunk.reading_order, chunk.id)),
     ]

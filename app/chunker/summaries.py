@@ -81,12 +81,8 @@ def _make_summary(
                 seen_refs.add(key)
                 refs.append(ref)
     pages = [ref.page for ref in refs]
+    # A generated summary has evidence areas, never its own PDF bbox.
     bbox = None
-    if len(set(pages)) == 1:
-        bbox = (
-            min(ref.bbox[0] for ref in refs), min(ref.bbox[1] for ref in refs),
-            max(ref.bbox[2] for ref in refs), max(ref.bbox[3] for ref in refs),
-        )
     source_element_ids = list(dict.fromkeys(
         element_id for source in sources for element_id in source.source_element_ids
     ))
